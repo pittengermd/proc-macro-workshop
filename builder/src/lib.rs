@@ -8,6 +8,7 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let name = input.ident;
     let builder_name = Ident::new(&format!("{name}Builder"), name.span());
     let builder_methods = generate_builder_methods(&input.data);
+    let build_method = generate_build_method(&name, &input.data);
     let ast = quote! {
         pub struct #builder_name {
             executable: Option<String>,
@@ -16,7 +17,8 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
             current_dir: Option<String>,
         }
         impl #builder_name {
-             #(#builder_methods)*
+            #(#builder_methods)*
+            #build_method
         }
         impl #name {
             fn builder() -> #builder_name {
@@ -54,4 +56,33 @@ fn generate_builder_methods(data: &Data) -> impl Iterator<Item = TokenStream> + 
         _ => unimplemented!(),
     };
     methods
+}
+
+//The requirements of this function state that every field must be checked that it was explicity set.
+//However, with the CommandBuilder struct defined as it,
+//there is no way to differiate between a field being
+//explicity declared as None and it not being set yet.
+//This is a problem.
+fn generate_build_method(name: &Ident, data: &Data) -> TokenStream {
+    let build_impl = match *data {
+        syn::Data::Struct(ref s) => match &s.fields {
+            Fields::Named(ref fields) => fields.named.iter().map(|f| {
+                let name = &f.ident;
+                let error_msg = format!("{name:#?} is missing");
+                quote! {
+                    #name: self.#name.as_ref().ok_or(#error_msg)?.clone(),
+                }
+            }),
+            Fields::Unnamed(_) => unimplemented!(),
+            Fields::Unit => unimplemented!(),
+        },
+        _ => unimplemented!(),
+    };
+    quote! {
+        pub fn build(&mut self) -> Result<#name, Box<dyn std::error::Error>> {
+            Ok(#name {
+                #(#build_impl)*
+            })
+        }
+    }
 }
